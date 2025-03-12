@@ -593,3 +593,33 @@ def adaptive_screen(
     # cluster with minimum contribution is not screened away
     else:
         return None, mbe_tot_error
+
+
+def adaptive_truncation_bootstrap(incs: List[np.ndarray]) -> float:
+    """
+    this function estimates the contribution of an increment
+    """
+    # number of bootstrapping samples
+    n_iter = 1000
+
+    # sum values for each iteration
+    iter_sums: List[float] = []
+
+    # create random number generator
+    rng = np.random.default_rng(seed=SEED)
+
+    # loop over bootstrapping iterations
+    for _ in range(n_iter):
+        # draw samples from increments with different occupations for current iteration
+        iter_sums.append(
+            sum([rng.choice(inc, size=inc.size, replace=True).sum() for inc in incs])
+        )
+
+    # compute confidence interval upper bound
+    est_inc = np.quantile(np.abs(iter_sums), 0.95).item()
+    logger.info3(
+        f"95% one-sided upper confidence bound for absolute sum of increment "
+        f"contributions: {est_inc:.1e}"
+    )
+
+    return est_inc

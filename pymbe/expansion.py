@@ -21,6 +21,7 @@ from abc import ABCMeta, abstractmethod
 from itertools import combinations
 from pyscf import gto, scf, cc, fci
 from typing import TYPE_CHECKING, cast, TypeVar, Generic, Tuple, List, Union, Dict
+from pymbe.filter import tuples_filtered, tuples_filtered_with_nocc, norm_pair_contribs
 
 from pymbe.logger import logger
 from pymbe.output import (
@@ -253,6 +254,11 @@ class ExpCls(
         self.screen_orbs = np.array([], dtype=np.int64)
         self.screen_tot_prop: List[TargetType] = []
         self.mbe_tot_error: List[float] = []
+
+        # filtering
+        if hasattr(mbe, "pair_importance"):
+            self.pair_importance = mbe.pair_importance
+        self.filter_thres = mbe.filter_thres
 
         # restart
         self.rst = mbe.rst
@@ -1099,19 +1105,59 @@ class ExpCls(
                             tup_nocc,
                         )
                     ):
-                        # distribute tuples
-                        if tup_idx % mpi.global_size != mpi.global_rank:
-                            continue
+                        # distribute and count tuples tuples
+                        if tup_idx % mpi.global_size == mpi.global_rank and is_lex_tup(
+                            cas(self.non_symm_inv_ref_space, tup),
+                            self.eqv_inc_orbs[-1],
+                            self.non_symm_inv_ref_space,
+                            self.cluster_dict,
+                        ):
+                            ntuples[tup_nocc] += 1
 
-                        # symmetry-pruning
-                        elif self.eqv_inc_orbs is not None:
-                            if is_lex_tup(
-                                cas(self.non_symm_inv_ref_space, tup),
-                                self.eqv_inc_orbs[-1],
-                                self.non_symm_inv_ref_space,
-                                self.cluster_dict,
-                            ):
-                                ntuples[tup_nocc] += 1
+            # determine number of non-redundant increments
+            elif self.filter_thres:
+                # initialize number of tuples for each occupation
+                ntuples = np.zeros(self.order + 1, dtype=np.int64)
+
+                # get results for pair contributions
+                (
+                    sort_pair_occ_contribs,
+                    sort_pair_virt_contribs,
+                    exp_pair_contribs,
+                    exp_nocc,
+                ) = norm_pair_contribs(
+                    self.exp_space[-1], self.nocc, self.order, self.pair_importance
+                )
+
+                # loop over number of occupied orbitals
+                for tup_nocc in range(self.order + 1):
+                    # check if tuple with this occupation is valid
+                    if not valid_tup(
+                        self.ref_nelec,
+                        self.ref_nhole,
+                        tup_nocc,
+                        self.order - tup_nocc,
+                        self.vanish_exc,
+                    ):
+                        continue
+
+                    # loop until no tuples left
+                    for tup_idx, _ in enumerate(
+                        tuples_filtered_with_nocc(
+                            sort_pair_occ_contribs,
+                            sort_pair_virt_contribs,
+                            exp_pair_contribs,
+                            self.order,
+                            tup_nocc,
+                            exp_nocc,
+                            self.filter_thres,
+                            self.exp_space[-1],
+                        )
+                    ):
+
+                        # distribute and count tuples
+                        if tup_idx % mpi.global_size == mpi.global_rank:
+                            ntuples[tup_nocc] += 1
 
                 # get total number of non-redundant increments
                 self.n_incs.append(mpi.global_comm.allreduce(ntuples, op=MPI.SUM))
@@ -1250,23 +1296,37 @@ class ExpCls(
         hashes_lst: List[List[int]] = [[] for _ in range(self.order + 1)]
         inc_lst: List[List[TargetType]] = [[] for _ in range(self.order + 1)]
 
+        # decide on what generator to use
+        if not self.filter_thres or self.order == 1:
+            tuples_gen = tuples(
+                self.exp_space[-1],
+                self.exp_clusters[-1] if not self.exp_single_orbs else None,
+                self.nocc,
+                self.ref_nelec,
+                self.ref_nhole,
+                self.vanish_exc,
+                self.order,
+                tup,
+                tup_idx,
+            )
+        else:
+            tuples_gen = tuples_filtered(
+                self.exp_space[-1],
+                self.exp_clusters[-1] if not self.exp_single_orbs else None,
+                self.nocc,
+                self.ref_nelec,
+                self.ref_nhole,
+                self.vanish_exc,
+                self.order,
+                self.filter_thres,
+                self.pair_importance,
+                tup,
+            )
+
         # perform calculation if not dryrun
         if not self.dryrun:
             # loop until no tuples left
-            for tup_idx, (tup, tup_clusters) in enumerate(
-                tuples(
-                    self.exp_space[-1],
-                    self.exp_clusters[-1] if not self.exp_single_orbs else None,
-                    self.nocc,
-                    self.ref_nelec,
-                    self.ref_nhole,
-                    self.vanish_exc,
-                    self.order,
-                    tup,
-                    tup_idx,
-                ),
-                start=tup_idx,
-            ):
+            for tup_idx, (tup, tup_clusters) in enumerate(tuples_gen, start=tup_idx):
                 # write restart files and re-init time
                 if rst_write and tup_idx % self.rst_freq == 0:
                     for tup_nocc in range(self.order + 1):
@@ -2167,6 +2227,69 @@ class ExpCls(
 
                     # get minimum cluster
                     min_idx = mpi.global_comm.bcast(None, root=0)
+
+        # adaptive truncation procedure
+        elif self.screen_type == "adaptive_truncation":
+            # start screening
+            if mpi.global_master:
+                # loop over number of occupied orbitals
+                order_incs: List[IncType] = []
+
+                for tup_nocc in range(self.order + 1):
+                    # occupation index
+                    k = self.order - 1
+                    l = tup_nocc
+
+                    # load k-th order increments
+                    order_incs.append(
+                        self._open_shared_inc(
+                            self.incs[k][l], self.n_incs[k][l], self.order, tup_nocc
+                        )
+                    )
+
+                # check if increments exist
+                if all(
+                    isinstance(inc, np.ndarray) and inc.size == 0 for inc in order_incs
+                ) and any(
+                    valid_tup(
+                        self.ref_nelec,
+                        self.ref_nhole,
+                        tup_nocc,
+                        self.order - tup_nocc,
+                        self.vanish_exc,
+                    )
+                    for tup_nocc in range(self.order + 1)
+                ):
+                    logger.info(f"Expansion terminated as no further increments remain")
+                    self.exp_space.append(np.array([], dtype=np.int64))
+                else:
+                    # estimate upper bound for increment using boostrap method
+                    est_inc = self._adaptive_truncation(order_incs)
+
+                    # check termination criteria and update expansion space
+                    if est_inc < self.screen_thres:
+                        logger.info(
+                            f"Expansion terminated as estimated upper bound for "
+                            f"increment ({est_inc:.1e}) is below threshold "
+                            f"{self.screen_thres:.1e}"
+                        )
+                        self.exp_space.append(np.array([], dtype=np.int64))
+                    else:
+                        logger.info3(
+                            f"Expansion continues as estimated upper bound for "
+                            f"increment ({est_inc:.1e}) is above threshold "
+                            f"{self.screen_thres:.1e}"
+                        )
+                        self.exp_space.append(self.exp_space[-1])
+
+                # bcast updated expansion space
+                mpi.global_comm.bcast(self.exp_clusters[-1], root=0)
+                mpi.global_comm.bcast(self.exp_space[-1], root=0)
+
+            else:
+                # receive updated expansion space
+                self.exp_clusters.append(mpi.global_comm.bcast(None, root=0))
+                self.exp_space.append(mpi.global_comm.bcast(None, root=0))
 
         # update symmetry-equivalent orbitals wrt screened clusters
         if self.symm_eqv_orbs is not None and self.eqv_inc_orbs is not None:
@@ -3159,9 +3282,17 @@ class ExpCls(
         """
 
     @abstractmethod
-    def _adaptive_screen(self, inc: List[List[IncType]]):
+    def _adaptive_screen(
+        self, incs: List[List[IncType]]
+    ) -> Tuple[Optional[int], float]:
         """
         this function wraps the adaptive screening function
+        """
+
+    @abstractmethod
+    def _adaptive_truncation(self, incs: List[IncType]) -> float:
+        """
+        this function wraps the adaptive truncation function
         """
 
     def _screen_remove_cluster_contrib(self, mpi: MPICls, cluster_idx: int) -> None:
@@ -3371,7 +3502,7 @@ class SingleTargetExpCls(
                             res[k - self.min_order] += inc[k - self.min_order][l][
                                 idx.item()
                             ]
-                        else:
+                        elif not self.filter_thres:
                             raise RuntimeError("Subtuple not found:", tup_sub)
 
         return np.sum(res, axis=0)

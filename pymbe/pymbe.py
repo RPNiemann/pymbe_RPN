@@ -89,6 +89,8 @@ class MBE:
         screen_perc: float = 0.9,
         screen_thres: float = 1.0e-2,
         screen_func: str = "max",
+        pair_importance: Optional[np.ndarray] = None,
+        filter_thres: float = 0.0,
         max_order: Optional[int] = None,
         rst: bool = True,
         rst_freq: int = int(1e6),
@@ -329,6 +331,11 @@ class MBE:
                 elif hasattr(self, "exp_space"):
                     # set default value for maximum expansion order
                     self.max_order = np.hstack(self.exp_space).size
+
+                # filtering
+                self.filter_thres = filter_thres
+                if pair_importance is not None:
+                    self.pair_importance = pair_importance
 
                 # restart
                 self.rst = rst
