@@ -223,47 +223,53 @@ def backtrack(
     """
     this function recursively generates tuples with pair importance above threshold
     """
+    # get sorted indices and pair contributions for last added orbital
+    sorted_idxs = sorted_pair_contribs[curr_tup[-1]][0]
+    sorted_contribs = sorted_pair_contribs[curr_tup[-1]][1]
+    
     # get maximum index below which product is below threshold, no orbital lower in
     # the array can produce a product larger than this
-    max_idx = sorted_pair_contribs[curr_tup[-1]][1].size - np.searchsorted(
-        sorted_pair_contribs[curr_tup[-1]][1][::-1], thres / curr_prod, side="right"
+    max_idx = (
+        sorted_contribs.size - 
+        sorted_contribs[::-1].searchsorted(thres / curr_prod, side="right")
     )
 
     # return if no orbital pair produces a product above threshold
     if max_idx == 0:
         return
+    
+    # get sorted pair contributions until threshold
+    sorted_idxs_until_max = sorted_idxs[:max_idx]
 
     # check if tuple construction is finished
     if len(curr_tup) + 1 == order:
         # add all pair contributions
-        orb_prods = curr_prod * np.prod(
+        orb_prods = curr_prod * (
             pair_contribs[
-                sorted_pair_contribs[curr_tup[-1]][0][:max_idx].reshape(-1, 1), curr_tup
-            ],
-            axis=1,
+                sorted_idxs_until_max[:, None], curr_tup
+            ].prod(axis=1)
         )
 
         # loop over orbitals that produce product above threshold
-        for idx in np.where(orb_prods > thres)[0]:
+        for idx in (orb_prods > thres).nonzero()[0]:
             overlap = orb_prods[idx]
             # add next orbital to tuple and yield
-            yield curr_tup + [sorted_pair_contribs[curr_tup[-1]][0][idx]], overlap
+            yield curr_tup + [sorted_idxs[idx]], overlap
 
     else:
         # only get orbitals which can still produce valid tuples above the threshold
-        valid_orb_idx = sorted_pair_contribs[curr_tup[-1]][0][:max_idx][
-            sorted_pair_contribs[curr_tup[-1]][0][:max_idx]
+        valid_orb_idx = sorted_idxs_until_max[
+            sorted_idxs_until_max 
             < len(sorted_pair_contribs) - order + len(curr_tup) + 1
         ]
 
         # add all pair contributions
-        orb_prods = curr_prod * np.prod(
-            pair_contribs[valid_orb_idx.reshape(-1, 1), curr_tup],
-            axis=1,
+        orb_prods = curr_prod * (
+            pair_contribs[valid_orb_idx[:, None], curr_tup].prod(axis=1)
         )
 
         # loop over orbitals that produce product above threshold
-        for idx in np.where(orb_prods > thres)[0]:
+        for idx in (orb_prods > thres).nonzero()[0]:
             # add next orbital to tuple and go to next recursion
             yield from backtrack(
                 curr_tup + [valid_orb_idx[idx]],
