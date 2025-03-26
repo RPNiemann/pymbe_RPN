@@ -226,18 +226,17 @@ def backtrack(
     # get sorted indices and pair contributions for last added orbital
     sorted_idxs = sorted_pair_contribs[curr_tup[-1]][0]
     sorted_contribs = sorted_pair_contribs[curr_tup[-1]][1]
-    
+
     # get maximum index below which product is below threshold, no orbital lower in
     # the array can produce a product larger than this
-    max_idx = (
-        sorted_contribs.size - 
-        sorted_contribs[::-1].searchsorted(thres / curr_prod, side="right")
+    max_idx = sorted_contribs.size - sorted_contribs[::-1].searchsorted(
+        thres / curr_prod, side="right"
     )
 
     # return if no orbital pair produces a product above threshold
     if max_idx == 0:
         return
-    
+
     # get sorted pair contributions until threshold
     sorted_idxs_until_max = sorted_idxs[:max_idx]
 
@@ -245,9 +244,7 @@ def backtrack(
     if len(curr_tup) + 1 == order:
         # add all pair contributions
         orb_prods = curr_prod * (
-            pair_contribs[
-                sorted_idxs_until_max[:, None], curr_tup
-            ].prod(axis=1)
+            pair_contribs[sorted_idxs_until_max[:, None], curr_tup].prod(axis=1)
         )
 
         # loop over orbitals that produce product above threshold
@@ -259,7 +256,7 @@ def backtrack(
     else:
         # only get orbitals which can still produce valid tuples above the threshold
         valid_orb_idx = sorted_idxs_until_max[
-            sorted_idxs_until_max 
+            sorted_idxs_until_max
             < len(sorted_pair_contribs) - order + len(curr_tup) + 1
         ]
 

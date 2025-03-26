@@ -152,7 +152,12 @@ def mbe_end(order: int, time: float) -> str:
 
 
 def redundant_results(
-    order: int, n_screen: int, n_van: int, n_calc: int, symm: bool
+    order: int,
+    n_screen: int,
+    n_van: int,
+    n_calc: int,
+    symm: bool,
+    filtering: bool,
 ) -> str:
     """
     this function prints the number of redundant increments
@@ -160,15 +165,43 @@ def redundant_results(
     # set string
     string: str
     if not symm:
-        string = f" RESULT-{order:d}:  total number of vanishing increments skipped: "
-        string += f"{n_screen - n_calc:}\n"
+        if not filtering:
+            string = f" RESULT-{order:d}:  total number of vanishing increments "
+            string += f"skipped: {n_screen - n_calc:}\n"
+        else:
+            string = f" RESULT-{order:d}:  total number of redundant increments "
+            string += f"skipped: {n_screen - n_calc:}\n"
+            string += f" RESULT-{order:d}:  {n_screen - n_van:} increments are "
+            string += f"vanishing due to occupation\n"
+            string += f" RESULT-{order:d}:  {n_van - n_calc:} increments are "
+            string += f"negligible due to pair importance\n"
     else:
-        string = f" RESULT-{order:d}:  total number of redundant increments skipped: "
-        string += f"{n_screen - n_calc:}\n"
-        string += f" RESULT-{order:d}:  {n_screen - n_van:} increments are vanishing "
-        string += f"due to occupation\n"
-        string += f" RESULT-{order:d}:  {n_van - n_calc:} increments are redundant due "
-        string += f"to symmetry\n"
+        if not filtering:
+            string = (
+                f" RESULT-{order:d}:  total number of redundant increments skipped: "
+            )
+            string += f"{n_screen - n_calc:}\n"
+            string += (
+                f" RESULT-{order:d}:  {n_screen - n_van:} increments are vanishing "
+            )
+            string += f"due to occupation\n"
+            string += (
+                f" RESULT-{order:d}:  {n_van - n_calc:} increments are redundant due "
+            )
+            string += f"to symmetry\n"
+        else:
+            string = (
+                f" RESULT-{order:d}:  total number of redundant increments skipped: "
+            )
+            string += f"{n_screen - n_calc:}\n"
+            string += (
+                f" RESULT-{order:d}:  {n_screen - n_van:} increments are vanishing "
+            )
+            string += f"due to occupation\n"
+            string += (
+                f" RESULT-{order:d}:  {n_van - n_calc:} increments are redundant due "
+            )
+            string += f"to symmetry or negligible due to pair importance\n"
     string += DIVIDER
 
     return string

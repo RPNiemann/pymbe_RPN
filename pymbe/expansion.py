@@ -446,6 +446,7 @@ class ExpCls(
                         self.n_tuples["van"][self.order - self.min_order],
                         np.sum(self.n_incs[self.order - self.min_order]),
                         self.symm_eqv_orbs is not None,
+                        self.filter_thres > 0.0,
                     )
                 )
 
@@ -2247,10 +2248,8 @@ class ExpCls(
                         )
                     )
 
-                # check if increments exist
-                if all(
-                    isinstance(inc, np.ndarray) and inc.size == 0 for inc in order_incs
-                ) and any(
+                # check if increments can be produced due to occupation
+                if any(
                     valid_tup(
                         self.ref_nelec,
                         self.ref_nhole,
@@ -2260,27 +2259,36 @@ class ExpCls(
                     )
                     for tup_nocc in range(self.order + 1)
                 ):
-                    logger.info(f"Expansion terminated as no further increments remain")
-                    self.exp_space.append(np.array([], dtype=np.int64))
-                else:
-                    # estimate upper bound for increment using boostrap method
-                    est_inc = self._adaptive_truncation(order_incs)
-
-                    # check termination criteria and update expansion space
-                    if est_inc < self.screen_thres:
+                    # check if increments exist
+                    if all(
+                        isinstance(inc, np.ndarray) and inc.size == 0
+                        for inc in order_incs
+                    ):
                         logger.info(
-                            f"Expansion terminated as estimated upper bound for "
-                            f"increment ({est_inc:.1e}) is below threshold "
-                            f"{self.screen_thres:.1e}"
+                            f"Expansion terminated as no further increments remain"
                         )
                         self.exp_space.append(np.array([], dtype=np.int64))
                     else:
-                        logger.info3(
-                            f"Expansion continues as estimated upper bound for "
-                            f"increment ({est_inc:.1e}) is above threshold "
-                            f"{self.screen_thres:.1e}"
-                        )
-                        self.exp_space.append(self.exp_space[-1])
+                        # estimate upper bound for increment using boostrap method
+                        est_inc = self._adaptive_truncation(order_incs)
+
+                        # check termination criteria and update expansion space
+                        if est_inc < self.screen_thres:
+                            logger.info(
+                                f"Expansion terminated as estimated upper bound for "
+                                f"increment ({est_inc:.1e}) is below threshold "
+                                f"{self.screen_thres:.1e}"
+                            )
+                            self.exp_space.append(np.array([], dtype=np.int64))
+                        else:
+                            logger.info3(
+                                f"Expansion continues as estimated upper bound for "
+                                f"increment ({est_inc:.1e}) is above threshold "
+                                f"{self.screen_thres:.1e}"
+                            )
+                            self.exp_space.append(self.exp_space[-1])
+                else:
+                    self.exp_space.append(self.exp_space[-1])
 
                 # bcast updated expansion space
                 mpi.global_comm.bcast(self.exp_clusters[-1], root=0)

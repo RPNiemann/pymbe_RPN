@@ -52,6 +52,7 @@ def general_setup(mbe: MBE):
             "eri",
             "mpi",
             "exp",
+            "pair_importance",
             "dipole_ints",
             "inact_fock",
             "eri_goaa",
