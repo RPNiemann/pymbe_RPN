@@ -920,6 +920,9 @@ class ExpCls(
                     self.n_tuples[n_tuples_type].append(
                         np.load(os.path.join(RST, files[i])).item()
                     )
+                # read orbital contributions
+                if "occ_orb_contrib_per_exp" in files[i]:
+                    self.occ_orb_contrib_per_exp.append(np.load(os.path.join(RST, files[i])))
 
                 # read expansion spaces
                 if "exp_space" in files[i]:
@@ -1216,7 +1219,7 @@ class ExpCls(
         if mpi.global_master:
             # read restart files
             rst_read = is_file("mbe_tup_idx", self.order) and is_file(
-                "mbe_tup", self.order) and is_file("mbe_occ_orb_contrib", self.order)
+                "mbe_tup", self.order) 
             # start tuple indices
             tup_idx = read_file("mbe_tup_idx", self.order).item() if rst_read else 0
             # start increment array indices
@@ -1225,7 +1228,7 @@ class ExpCls(
                 if rst_read
                 else np.zeros(self.order + 1, dtype=np.int64)
             )
-            self.occ_orb_contrib_per_exp = read_file("mbe_occ_orb_contrib", self.order) if rst_read else []
+
             # start tuples
             tup = read_file("mbe_tup", self.order) if rst_read else None
             # wake up slaves
@@ -1382,13 +1385,11 @@ class ExpCls(
                         n_calc = 0
 
                     # Reduce occupied orbital increment contributions
-                    for exp_idx in range(self.order):
-                        self.occ_orb_contrib_per_exp[exp_idx] = mpi_reduce(
-                            mpi.global_comm, np.asarray(self.occ_orb_contrib_per_exp[exp_idx]), root=0, op=MPI.SUM
-                        )
+                    self.occ_orb_contrib_per_exp[-1] = mpi_reduce(
+                        mpi.global_comm, np.asarray(self.occ_orb_contrib_per_exp[-1]), root=0, op=MPI.SUM
+                    )
                     if not mpi.global_master:
-                        for exp_idx in range(self.order):
-                            self.occ_orb_contrib_per_exp[exp_idx] = np.zeros(self.norb, dtype=np.float64)       
+                            self.occ_orb_contrib_per_exp[-1] = np.zeros(self.norb, dtype=np.float64)       
 
                     # reduce increment statistics onto global master
                     min_inc = self._mpi_reduce_target(mpi.global_comm, min_inc, MPI.MIN)
@@ -1485,7 +1486,7 @@ class ExpCls(
                                 self.order, np.sum(inc_idx) / np.sum(self.n_incs[-1])
                             )
                         )
-                        write_file(np.asarray(self.occ_orb_contrib_per_exp), "mbe_occ_orb_contrib", self.order)
+                        write_file(np.asarray(self.occ_orb_contrib_per_exp), "occ_orb_contrib_per_exp", self.order)
 
                 # distribute tuples
                 if tup_idx % mpi.global_size != mpi.global_rank:
@@ -1561,8 +1562,8 @@ class ExpCls(
                     # add increment to orbital contribution list
                     for orb_idx in tup:
                         if orb_idx in self.occ_orb_idx:
-                            occ_in_tup = set(tup).intersection(set(self.occ_orb_idx))
-                            self.occ_orb_contrib_per_exp[len(tup)-2][orb_idx] += inc_tup / len(occ_in_tup)
+                            occ_in_cas = cas_idx[cas_idx < self.nocc]
+                            self.occ_orb_contrib_per_exp[-1][orb_idx] += inc_tup / len(occ_in_cas)
 
                     # add hash and increment
                     hashes_lst[nocc_tup].append(hash_1d(tup))
@@ -1585,13 +1586,12 @@ class ExpCls(
         mpi.global_comm.Barrier()
 
         # Final reduce of orbital contributions to increments
-        for exp_idx in range(len(self.occ_orb_contrib_per_exp)):
-            self.occ_orb_contrib_per_exp[exp_idx] = mpi_reduce(
-                mpi.global_comm, np.asarray(self.occ_orb_contrib_per_exp[exp_idx]), root=0, op=MPI.SUM
+        if self.order > 1:
+            self.occ_orb_contrib_per_exp[-1] = mpi_reduce(
+                mpi.global_comm, np.asarray(self.occ_orb_contrib_per_exp[-1]), root=0, op=MPI.SUM
             )
-        if not mpi.global_master:
-            for exp_idx in range(len(self.occ_orb_contrib_per_exp)):
-                self.occ_orb_contrib_per_exp[exp_idx] = np.zeros(self.norb, dtype=np.float64)
+            if not mpi.global_master:
+                self.occ_orb_contrib_per_exp[-1] = np.zeros(self.norb, dtype=np.float64)
 
         # print final status
         if mpi.global_master:
