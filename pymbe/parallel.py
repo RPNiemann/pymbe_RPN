@@ -17,7 +17,7 @@ __status__ = "Development"
 from mpi4py import MPI
 import numpy as np
 from pyscf import lib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from typing import Tuple, Optional
@@ -50,8 +50,9 @@ class MPICls:
         self.global_master = self.global_rank == 0
 
         # local node communicator (memory sharing)
-        self.local_comm = self.global_comm.Split_type(
-            MPI.COMM_TYPE_SHARED, self.global_rank
+        self.local_comm = cast(
+            MPI.Intracomm,
+            self.global_comm.Split_type(MPI.COMM_TYPE_SHARED, self.global_rank),
         )
         self.local_rank = self.local_comm.Get_rank()
         self.local_master = self.local_rank == 0
