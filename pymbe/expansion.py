@@ -387,11 +387,9 @@ class ExpCls(
             self.ref_civec = init_wfn(self.ref_space.size, self.ref_nelec, 1)
             self.ref_civec[0, 0, 0] = 1.0
 
-        # Occupied orbital contributions to correlation energy
-        self.occ_orb_contrib_per_exp: list[np.ndarray] = []
-        self.occ_orb_idx: np.ndarray = np.array([i for i in range(self.nocc)], dtype=np.int64)
-        self.virt_orb_contrib_per_exp: list[np.ndarray] = []
-        self.virt_orb_idx: np.ndarray = np.array([i+self.nocc for i in range(self.norb - self.nocc+1)], dtype=np.int64)
+        # occupied orbital contributions to correlation energy
+        self.occ_orb_contrib_per_order: List[TargetType] = []
+        self.virt_orb_contrib_per_order: List[TargetType] = []
 
         # attributes from restarted calculation
         if self.restarted:
@@ -920,11 +918,6 @@ class ExpCls(
                     self.n_tuples[n_tuples_type].append(
                         np.load(os.path.join(RST, files[i])).item()
                     )
-                # read orbital contributions
-                if "occ_orb_contrib_per_exp" in files[i]:
-                    self.occ_orb_contrib_per_exp.append(np.load(os.path.join(RST, files[i])))
-                if "virt_orb_contrib_per_exp" in files[i]:
-                    self.virt_orb_contrib_per_exp.append(np.load(os.path.join(RST, files[i])))
 
                 # read expansion spaces
                 if "exp_space" in files[i]:
@@ -978,6 +971,16 @@ class ExpCls(
                 # read max increment
                 elif "mbe_max_inc" in files[i]:
                     self.max_inc.append(self._read_target_file(files[i]))
+
+                # read orbital contributions
+                elif "occ_orb_contrib_per_order" in files[i]:
+                    self.occ_orb_contrib_per_order.append(
+                        self._read_target_list_file(files[i])
+                    )
+                elif "virt_orb_contrib_per_order" in files[i]:
+                    self.virt_orb_contrib_per_order.append(
+                        self._read_target_list_file(files[i])
+                    )
 
                 # read squared overlaps and respective tuples
                 elif "mbe_tup_sq_overlaps" in files[i]:
@@ -1221,7 +1224,8 @@ class ExpCls(
         if mpi.global_master:
             # read restart files
             rst_read = is_file("mbe_tup_idx", self.order) and is_file(
-                "mbe_tup", self.order) 
+                "mbe_tup", self.order
+            )
             # start tuple indices
             tup_idx = read_file("mbe_tup_idx", self.order).item() if rst_read else 0
             # start increment array indices
@@ -1277,6 +1281,21 @@ class ExpCls(
             min_inc = self._init_target_inst(1.0e12, self.norb, self.nocc)
             mean_inc = self._init_target_inst(0.0, self.norb, self.nocc)
             max_inc = self._init_target_inst(0.0, self.norb, self.nocc)
+
+        # init orbital contributions
+        if not (mpi.global_master and rst_read):
+            self.occ_orb_contrib_per_order.append(
+                [
+                    self._init_target_inst(0.0, self.norb, self.nocc)
+                    for _ in range(self.norb)
+                ]
+            )
+            self.virt_orb_contrib_per_order.append(
+                [
+                    self._init_target_inst(0.0, self.norb, self.nocc)
+                    for _ in range(self.norb)
+                ]
+            )
 
         # init screen arrays
         for order_idx in range(self.order):
@@ -1387,22 +1406,23 @@ class ExpCls(
                     if not mpi.global_master:
                         n_calc = 0
 
-                    # When restarting, ensure workers have arrays to reduce onto
-                    if not mpi.global_master and len(self.occ_orb_contrib_per_exp) == 0:
-                        self.occ_orb_contrib_per_exp.append(np.zeros(self.norb, dtype=np.float64))
-                    if not mpi.global_master and len(self.virt_orb_contrib_per_exp) == 0:
-                        self.virt_orb_contrib_per_exp.append(np.zeros(self.norb, dtype=np.float64))
-
-                    # Reduce occupied and virtual orbital increment contributions
-                    self.occ_orb_contrib_per_exp[-1] = mpi_reduce(
-                        mpi.global_comm, np.asarray(self.occ_orb_contrib_per_exp[-1]), root=0, op=MPI.SUM
-                    )
-                    self.virt_orb_contrib_per_exp[-1] = mpi_reduce(
-                        mpi.global_comm, np.asarray(self.virt_orb_contrib_per_exp[-1]), root=0, op=MPI.SUM
-                    )
-                    if not mpi.global_master:
-                            self.occ_orb_contrib_per_exp[-1] = np.zeros(self.norb, dtype=np.float64)
-                            self.virt_orb_contrib_per_exp[-1] = np.zeros(self.norb, dtype=np.float64)
+                    # reduce occupied and virtual orbital increment contributions
+                    for i in range(self.norb):
+                        self.occ_orb_contrib_per_order[-1][i] = self._mpi_reduce_target(
+                            mpi.global_comm,
+                            self.occ_orb_contrib_per_order[-1][i],
+                            MPI.SUM,
+                        )
+                        self.virt_orb_contrib_per_order[-1][i] = (
+                            self._mpi_reduce_target(
+                                mpi.global_comm,
+                                self.virt_orb_contrib_per_order[-1][i],
+                                MPI.SUM,
+                            )
+                        )
+                        if not mpi.global_master:
+                            self.occ_orb_contrib_per_order[-1][i].fill(0.0)
+                            self.virt_orb_contrib_per_order[-1][i].fill(0.0)
 
                     # reduce increment statistics onto global master
                     min_inc = self._mpi_reduce_target(mpi.global_comm, min_inc, MPI.MIN)
@@ -1499,8 +1519,16 @@ class ExpCls(
                                 self.order, np.sum(inc_idx) / np.sum(self.n_incs[-1])
                             )
                         )
-                        write_file(np.asarray(self.occ_orb_contrib_per_exp[-1]), "occ_orb_contrib_per_exp", order=self.order)
-                        write_file(np.asarray(self.virt_orb_contrib_per_exp[-1]), "virt_orb_contrib_per_exp", order=self.order)
+                        self._write_target_list_file(
+                            self.occ_orb_contrib_per_order[-1],
+                            "occ_orb_contrib_per_order",
+                            self.order,
+                        )
+                        self._write_target_list_file(
+                            self.virt_orb_contrib_per_order[-1],
+                            "virt_orb_contrib_per_order",
+                            self.order,
+                        )
 
                 # distribute tuples
                 if tup_idx % mpi.global_size != mpi.global_rank:
@@ -1562,12 +1590,6 @@ class ExpCls(
                 # increment calculation counter
                 n_calc += 1
 
-                # Occupied orbital contributions per expansion order
-                while len(self.occ_orb_contrib_per_exp) < self.order - 1:
-                    self.occ_orb_contrib_per_exp.append(np.zeros(self.norb, dtype=np.float64))
-                while len(self.virt_orb_contrib_per_exp) < self.order - 1:
-                    self.virt_orb_contrib_per_exp.append(np.zeros(self.norb, dtype=np.float64))
-
                 # loop over equivalent increment sets
                 for tup, tup_clusters, eqv_set in zip(
                     eqv_inc_lex_tup, eqv_inc_lex_tup_clusters, eqv_inc_set
@@ -1576,14 +1598,23 @@ class ExpCls(
                     inc_tup = target_tup - self._sum(inc, hashes, tup, tup_clusters)
 
                     # add increment to orbital contribution list
+                    n_occ_in_cas = np.count_nonzero(cas_idx < self.nocc)
+                    n_virt_in_cas = np.count_nonzero(cas_idx >= self.nocc)
                     for orb_idx in tup:
-                        if orb_idx in self.occ_orb_idx:
-                            occ_in_cas = cas_idx[cas_idx < self.nocc]
-                            self.occ_orb_contrib_per_exp[-1][orb_idx] += inc_tup / len(occ_in_cas)
-                        if orb_idx in self.virt_orb_idx:
-                            virt_in_cas = cas_idx[cas_idx >= self.nocc] 
-                            self.virt_orb_contrib_per_exp[-1][orb_idx] += inc_tup / len(virt_in_cas)
-
+                        if orb_idx < self.nocc:
+                            self.add_cas_target(
+                                self.occ_orb_contrib_per_order[-1][orb_idx],
+                                inc_tup / n_occ_in_cas,
+                                cas_idx,
+                                self.nocc,
+                            )
+                        else:
+                            self.add_cas_target(
+                                self.virt_orb_contrib_per_order[-1][orb_idx],
+                                inc_tup / n_virt_in_cas,
+                                cas_idx,
+                                self.nocc,
+                            )
                     # add hash and increment
                     hashes_lst[nocc_tup].append(hash_1d(tup))
                     inc_lst[nocc_tup].append(inc_tup)
@@ -1606,15 +1637,16 @@ class ExpCls(
 
         # Final reduce of orbital contributions to increments
         if self.order > 1:
-            self.occ_orb_contrib_per_exp[-1] = mpi_reduce(
-                mpi.global_comm, np.asarray(self.occ_orb_contrib_per_exp[-1]), root=0, op=MPI.SUM
-            )
-            self.virt_orb_contrib_per_exp[-1] = mpi_reduce(
-                mpi.global_comm, np.asarray(self.virt_orb_contrib_per_exp[-1]), root=0, op=MPI.SUM
-            )
-            if not mpi.global_master:
-                self.occ_orb_contrib_per_exp[-1] = np.zeros(self.norb, dtype=np.float64)
-                self.virt_orb_contrib_per_exp[-1] = np.zeros(self.norb, dtype=np.float64)
+            for i in range(self.norb):
+                self.occ_orb_contrib_per_order[-1][i] = self._mpi_reduce_target(
+                    mpi.global_comm, self.occ_orb_contrib_per_order[-1][i], MPI.SUM
+                )
+                self.virt_orb_contrib_per_order[-1][i] = self._mpi_reduce_target(
+                    mpi.global_comm, self.virt_orb_contrib_per_order[-1][i], MPI.SUM
+                )
+                if not mpi.global_master:
+                    self.occ_orb_contrib_per_order[-1][i].fill(0.0)
+                    self.virt_orb_contrib_per_order[-1][i].fill(0.0)
 
         # print final status
         if mpi.global_master:
@@ -3136,6 +3168,21 @@ class ExpCls(
         this function defines reads the increment restart files
         """
 
+    @abstractmethod
+    def _write_target_list_file(
+        self, target_lst: List[IncType], file: str, order: int
+    ) -> None:
+        """
+        this function writes list of targets restart files
+        """
+
+    @staticmethod
+    @abstractmethod
+    def _read_target_list_file(file: str) -> List[IncType]:
+        """
+        this function reads list of targets restart files
+        """
+
     def _load_inc(
         self, local_master: bool, local_comm: MPI.Intracomm, rst_read: bool
     ) -> Tuple[List[List[IncType]], List[Optional[MPIWinType]]]:
@@ -3297,6 +3344,18 @@ class ExpCls(
     ) -> None:
         """
         this function modifies the screening array
+        """
+
+    @abstractmethod
+    def add_cas_target(
+        self,
+        target_full: TargetType,
+        target_tup: TargetType,
+        idx: np.ndarray,
+        nocc: int,
+    ) -> None:
+        """
+        this function adds a target for a smaller active space inplace to a full target
         """
 
     @abstractmethod
@@ -3598,6 +3657,21 @@ class SingleTargetExpCls(
         """
         return np.load(os.path.join(RST, file))
 
+    def _write_target_list_file(
+        self, target_lst: List[SingleTargetType], file: str, order: int
+    ) -> None:
+        """
+        this function writes list of targets restart files
+        """
+        np.save(os.path.join(RST, file + f"_{order}"), np.stack(target_lst, axis=0))
+
+    @staticmethod
+    def _read_target_list_file(file: str) -> List[SingleTargetType]:
+        """
+        this function reads list of targets restart files
+        """
+        return list(np.load(os.path.join(RST, file)))
+
     @abstractmethod
     def _allocate_shared_inc(
         self, size: int, allocate: bool, comm: MPI.Intracomm, *args: int
@@ -3669,6 +3743,19 @@ class SingleTargetExpCls(
         this function frees the supplied increment windows
         """
         inc_win.Free()
+
+    def add_cas_target(
+        self,
+        target_full: SingleTargetType,
+        target_tup: SingleTargetType,
+        idx: np.ndarray,
+        nocc: int,
+    ) -> None:
+        """
+        this function adds a target for a smaller active space inplace to a full target
+        """
+        # add to total target
+        target_full += target_tup
 
     def _update_inc_stats(
         self,
