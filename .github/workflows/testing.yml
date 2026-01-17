@@ -1,4 +1,4 @@
-name: Python application
+name: PyMBE Testing
 
 on:
   push:
@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: read
+  checks: write
+  pull-requests: write
 
 jobs:
   testing:
@@ -36,6 +38,7 @@ jobs:
         
     - name: Install dependencies and PyMBE
       run: |
+        sudo apt-get -qq install libblas-dev liblapack-dev
         python -m pip install --upgrade pip
         pip install .
         pip install pytest pytest-cov mypy
@@ -44,24 +47,21 @@ jobs:
     - name: Fetch MBECC library
       run: |
         gh release download --repo eriksen-lab/mbecc --pattern libmbecc.so
-        echo "MBECCLIB = 'libmbecc.so'" > pymbe/settings.py
-        ls pymbe/
+        echo "MBECCLIB = '$(pwd)/libmbecc.so'" > pymbe/settings.py
       env:
         GH_TOKEN: ${{ secrets.MBECC_RELEASE_ACCESS }}
       shell: bash
 
-    # - name: Type checking
-    #   run: mypy --ignore-missing-imports --warn-redundant-casts pymbe
+    - name: Type checking
+      run: mypy --ignore-missing-imports --warn-redundant-casts pymbe
         
     - name: Testing
       run: |
         export PYTHONHASHSEED=0
-        mkdir -p junit
-        python3 -m pytest -x \
+        python3 -m pytest -x -v \
           --junitxml=test-results.xml \
           --cov=pymbe \
           --cov-report=xml
-          -k "ccsdt"
 
     - name: Publish Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2
