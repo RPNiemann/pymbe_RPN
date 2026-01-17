@@ -596,7 +596,7 @@ class MBE:
                 n_single_orbs,
                 orb_pairs,
                 np.hstack(self.exp_space),
-                max(self.nelec),
+                max(cast(np.ndarray, self.nelec)),
                 self.point_group,
                 (
                     self.orbsym
