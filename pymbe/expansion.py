@@ -388,8 +388,8 @@ class ExpCls(
             self.ref_civec[0, 0, 0] = 1.0
 
         # occupied orbital contributions to correlation energy
-        self.occ_orb_contrib_per_order: List[TargetType] = []
-        self.virt_orb_contrib_per_order: List[TargetType] = []
+        self.occ_orb_contrib_per_order: List[List[TargetType]] = []
+        self.virt_orb_contrib_per_order: List[List[TargetType]] = []
 
         # attributes from restarted calculation
         if self.restarted:
@@ -3178,7 +3178,7 @@ class ExpCls(
 
     @staticmethod
     @abstractmethod
-    def _read_target_list_file(file: str) -> List[IncType]:
+    def _read_target_list_file(file: str) -> List[TargetType]:
         """
         this function reads list of targets restart files
         """
