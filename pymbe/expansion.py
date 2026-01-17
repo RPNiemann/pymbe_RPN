@@ -1421,8 +1421,12 @@ class ExpCls(
                             )
                         )
                         if not mpi.global_master:
-                            self.occ_orb_contrib_per_order[-1][i].fill(0.0)
-                            self.virt_orb_contrib_per_order[-1][i].fill(0.0)
+                            self.occ_orb_contrib_per_order[-1][i] = (
+                                self._init_target_inst(0.0, self.norb, self.nocc)
+                            )
+                            self.virt_orb_contrib_per_order[-1][i] = (
+                                self._init_target_inst(0.0, self.norb, self.nocc)
+                            )
 
                     # reduce increment statistics onto global master
                     min_inc = self._mpi_reduce_target(mpi.global_comm, min_inc, MPI.MIN)
@@ -1645,8 +1649,12 @@ class ExpCls(
                     mpi.global_comm, self.virt_orb_contrib_per_order[-1][i], MPI.SUM
                 )
                 if not mpi.global_master:
-                    self.occ_orb_contrib_per_order[-1][i].fill(0.0)
-                    self.virt_orb_contrib_per_order[-1][i].fill(0.0)
+                    self.occ_orb_contrib_per_order[-1][i] = self._init_target_inst(
+                        0.0, self.norb, self.nocc
+                    )
+                    self.virt_orb_contrib_per_order[-1][i] = self._init_target_inst(
+                        0.0, self.norb, self.nocc
+                    )
 
         # print final status
         if mpi.global_master:
@@ -3170,7 +3178,7 @@ class ExpCls(
 
     @abstractmethod
     def _write_target_list_file(
-        self, target_lst: List[IncType], file: str, order: int
+        self, target_lst: List[TargetType], file: str, order: int
     ) -> None:
         """
         this function writes list of targets restart files
