@@ -464,7 +464,7 @@ def test_get_vhf() -> None:
     eri_s4 = np.zeros((npair, npair), dtype=np.float64)
     idx1, idx2 = np.tril_indices(norb * (norb + 1) // 2)
     eri_s4[idx1, idx2] = eri_s8
-    eri_s4 = np.maximum(eri_s4, eri_s4.T)
+    np.maximum(eri_s4, eri_s4.T, out=eri_s4)
 
     vhf = get_vhf(eri_s4, nocc, norb)
 
